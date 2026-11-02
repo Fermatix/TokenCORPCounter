@@ -1,0 +1,20 @@
+# Environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE and tooling
+.idea/
+.vscode/
+.claude/
+
+# Local tests and generated reports
+tests/
+token_report.*
+*.egg-info/
+
+# OS junk
+.DS_Store
+Thumbs.db
