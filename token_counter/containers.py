@@ -18,6 +18,7 @@ from typing import Callable
 
 from .core import Options, Row, Source
 from .tokens import TextCounter
+from .clean import feed_content
 
 ScanFn = Callable[[Source, Options], list[Row]]
 
@@ -31,7 +32,8 @@ def is_junk(name: str) -> bool:
 
 def _skipped(parent: Source, name: str, size: int, reason: str) -> Row:
     fmt = os.path.splitext(name)[1].lstrip(".").lower() or "?"
-    return Row(f"{parent.path}!/{name}", "skipped", fmt, "skipped", size, counted=False, notes=[reason])
+    return Row(f"{parent.path}!/{name}", "skipped", fmt, "skipped", size, counted=False,
+               is_attachment=parent.attachment, notes=[reason])
 
 
 def _zip_name(info: zipfile.ZipInfo) -> str:
@@ -102,7 +104,8 @@ def scan_7z(src: Source, opts: Options, scan: ScanFn) -> list[Row]:
             rel = file.relative_to(root).as_posix()
             if is_junk(rel):
                 continue
-            child = Source(f"{src.path}!/{rel}", file.name, file.stat().st_size, file=file, depth=src.depth + 1)
+            child = Source(f"{src.path}!/{rel}", file.name, file.stat().st_size, file=file, depth=src.depth + 1,
+                           attachment=src.attachment)
             rows += scan(child, opts)
     return rows
 
@@ -127,7 +130,9 @@ def scan_eml(src: Source, opts: Options, scan: ScanFn, row: Row) -> list[Row]:
         is_text = part.get_content_maintype() == "text"
         if part.get_filename() or part.get_content_disposition() == "attachment" or not is_text:
             payload = part.get_payload(decode=True) or b""
-            children += scan(Source.from_bytes(src, _attachment_name(part, index), payload), opts)
+            attachment = Source.from_bytes(src, _attachment_name(part, index), payload)
+            attachment.attachment = True
+            children += scan(attachment, opts)
             continue
         try:
             text = part.get_content()
@@ -137,6 +142,16 @@ def scan_eml(src: Source, opts: Options, scan: ScanFn, row: Row) -> list[Row]:
     counter.close()
     row.method = "e-mail headers and text (attachments as separate rows)"
     row.chars, row.text_tokens = counter.chars, counter.tokens
+    content = TextCounter()
+    body = msg.get_body(preferencelist=("plain", "html"))
+    if body is not None:
+        try:
+            feed_content(content, body.get_content())
+        except (LookupError, ValueError):
+            row.clean_counted = False
+            row.notes.append("clean e-mail body could not be decoded")
+    content.close()
+    row.clean_chars, row.clean_text_tokens = content.chars, content.tokens
     return [row] + children
 
 
@@ -167,13 +182,16 @@ def scan_msg(src: Source, opts: Options, scan: ScanFn, row: Row) -> list[Row]:
         else:
             fields = {"From": msg.sender, "To": msg.to, "Cc": msg.cc, "Date": msg.date, "Subject": msg.subject}
             counter.feed("".join(f"{k}: {v}\n" for k, v in fields.items() if v))
-        counter.feed((msg.body or "") + "\n")
+        body = msg.body or ""
+        counter.feed(body + "\n")
         children: list[Row] = []
         for i, att in enumerate(msg.attachments, 1):
             data = att.data
             name = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) or f"attachment{i}"
             if isinstance(data, bytes):
-                children += scan(Source.from_bytes(src, name, data), opts)
+                attachment = Source.from_bytes(src, name, data)
+                attachment.attachment = True
+                children += scan(attachment, opts)
             else:
                 row.notes.append(f"nested e-mail not parsed: {name}")
     finally:
@@ -181,4 +199,8 @@ def scan_msg(src: Source, opts: Options, scan: ScanFn, row: Row) -> list[Row]:
     counter.close()
     row.method = "Outlook e-mail headers and text (attachments as separate rows)"
     row.chars, row.text_tokens = counter.chars, counter.tokens
+    content = TextCounter()
+    feed_content(content, body)
+    content.close()
+    row.clean_chars, row.clean_text_tokens = content.chars, content.tokens
     return [row] + children

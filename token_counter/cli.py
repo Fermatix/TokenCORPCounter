@@ -31,7 +31,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
                    help="image token mode (default: high)")
     p.add_argument("--base64", action="store_true",
                    help="add a base64_tokens column: each whole file as base64 (as in a raw API request); "
-                   "not included in total_tokens")
+                   "not included in the clean or full totals")
     p.add_argument("--exclude", action="append", default=[], metavar="GLOB",
                    help="skip files and folders matching a glob, repeatable: --exclude '*.log'")
     p.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 4), help="number of threads")
@@ -69,6 +69,7 @@ def _scan_file(file: Path, rel: str, opts: Options) -> list[Row]:
         src = Source.from_file(file, rel)
     except OSError as e:
         return [Row(rel, "error", file.suffix.lstrip(".").lower(), "error", 0, counted=False,
+                    error=True, clean_counted=False,
                     notes=[f"unreadable: {e}"])]
     return scan(src, opts)
 

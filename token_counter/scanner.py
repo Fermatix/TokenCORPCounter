@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
+
 from . import containers as c
 from .core import Options, Row, Source
 from .detect import category, detect
@@ -70,19 +73,32 @@ def _describe(error: Exception) -> str:
 def _fallback(src: Source, row: Row, opts: Options, error: Exception) -> Row:
     row.chars, row.text_tokens, row.images, row.image_tokens = 0, 0, 0, 0
     row.notes.append(f"not parsed: {_describe(error)}")
+    row.clean_text_tokens = row.clean_chars = 0
+    row.clean_counted = False
+    row.error = True
     count_binary(src, row, opts)
     return row
+
+
+def _attachment(src: Source) -> bool:
+    return src.attachment or any(
+        re.match(r"^(?:attachments?|вложения)(?:$|[-_ .])", part, re.I)
+        for part in src.path.replace("\\", "/").replace("!/", "/").split("/")
+    )
 
 
 def scan(src: Source, opts: Options) -> list[Row]:
     try:
         kind = detect(src)
     except OSError as e:  # unreadable file: report it, don't stop the scan
-        return [Row(src.path, "error", src.ext.lstrip(".") or "?", "error", src.size, counted=False,
+        return [Row(src.path, "error", src.ext.lstrip(".") or "?", "error", src.size, counted=False, error=True,
+                    clean_counted=False, is_attachment=_attachment(src),
                     notes=[f"unreadable: {_describe(e)}"])]
     except Exception:
         kind = "binary"
     row = Row(src.path, category(kind, src), src.ext.lstrip(".") or kind, "", src.size)
+    src.attachment = _attachment(src)
+    row.is_attachment = src.attachment or kind in {"image", "media", "binary", "rar"}
     try:
         if kind in CONTAINERS:
             if src.depth >= opts.max_depth:
@@ -96,6 +112,15 @@ def scan(src: Source, opts: Options) -> list[Row]:
             rows = [row]
     except Exception as e:
         rows = [_fallback(src, row, opts, e)]
+    if rows[0] is row and not row.checksum:
+        try:
+            checksum = hashlib.sha256()
+            with src.open() as stream:
+                while chunk := stream.read(1 << 20):
+                    checksum.update(chunk)
+            row.checksum = checksum.hexdigest()
+        except OSError:
+            pass
     if opts.base64 and rows[0] is row:
         try:
             with src.open() as f:

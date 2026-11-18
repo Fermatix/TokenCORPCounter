@@ -27,6 +27,7 @@ class Source:
     file: Path | None = None
     data: bytes | None = None
     depth: int = 0
+    attachment: bool = False
 
     @classmethod
     def from_file(cls, file: Path, display: str) -> Source:
@@ -41,6 +42,7 @@ class Source:
             size=len(data),
             data=data,
             depth=parent.depth + 1,
+            attachment=parent.attachment,
         )
 
     @property
@@ -78,6 +80,41 @@ class Row:
     base64_tokens: int | None = None
     counted: bool = True  # False when the content could not be turned into tokens (binary, skipped, error)
     notes: list[str] = field(default_factory=list)
+    clean_text_tokens: int = 0
+    clean_chars: int = 0
+    clean_counted: bool = True
+    is_attachment: bool = False
+    checksum: str = ""
+    duplicate_of: str = ""
+    error: bool = False
+
+    @property
+    def clean_tokens(self) -> int:
+        return 0 if self.is_attachment else self.clean_text_tokens
+
+    @property
+    def dirty_tokens(self) -> int:
+        return 0 if self.is_attachment else self.text_tokens
+
+    @property
+    def attachment_text_tokens(self) -> int:
+        return self.text_tokens if self.is_attachment else 0
+
+    @property
+    def clean_attachment_text_tokens(self) -> int:
+        return self.clean_text_tokens if self.is_attachment else 0
+
+    @property
+    def attachment_tokens(self) -> int:
+        return self.attachment_text_tokens + self.image_tokens
+
+    @property
+    def clean_with_attachments(self) -> int:
+        return self.clean_text_tokens + self.image_tokens
+
+    @property
+    def dirty_with_attachments(self) -> int:
+        return self.text_tokens + self.image_tokens
 
     @property
     def total_tokens(self) -> int:

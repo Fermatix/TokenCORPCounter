@@ -50,25 +50,37 @@ class TextCounter:
     def __init__(self) -> None:
         self.tokens = 0
         self.chars = 0
-        self._buf = ""
+        self._parts: list[str] = []
+        self._pending = 0
 
     def feed(self, text: str) -> None:
         if not text:
             return
         self.chars += len(text)
-        buf = self._buf + text if self._buf else text
+        self._parts.append(text)
+        self._pending += len(text)
+        if self._pending <= CHUNK_CHARS:
+            # JSON fields and table rows arrive in small pieces. Avoid copying
+            # the entire pending megabyte on each field.
+            if len(self._parts) >= 8192:
+                self._parts = ["".join(self._parts)]
+            return
+        buf = "".join(self._parts)
         start = 0
         enc = encoding()
         while len(buf) - start > CHUNK_CHARS:
             cut = _cut_point(buf, start, start + CHUNK_CHARS)
             self.tokens += len(enc.encode_ordinary(buf[start:cut]))
             start = cut
-        self._buf = buf[start:]
+        tail = buf[start:]
+        self._parts = [tail] if tail else []
+        self._pending = len(tail)
 
     def close(self) -> int:
-        if self._buf:
-            self.tokens += len(encoding().encode_ordinary(self._buf))
-            self._buf = ""
+        if self._parts:
+            self.tokens += len(encoding().encode_ordinary("".join(self._parts)))
+            self._parts.clear()
+            self._pending = 0
         return self.tokens
 
 
